@@ -120,7 +120,7 @@ unused here and only keeps the argument order the Python side sends."
              "You should customize `mpv-definition-function'."))
    x y))
 
-(defun mpv-explain-text (sub-text word x y)
+(defun mpv-explain-text (sub-text _word x y)
   "Show SUB-TEXT and WORD near X, Y.
 
 The explanation is whatever `mpv-translation-function' returns for
