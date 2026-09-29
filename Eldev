@@ -1,0 +1,14 @@
+; -*- mode: emacs-lisp; lexical-binding: t -*-
+
+;; Uncomment some calls below as needed for your project.
+(eldev-use-package-archive 'gnu-elpa)
+;(eldev-use-package-archive 'nongnu-elpa)
+;(eldev-use-package-archive 'melpa)
+
+;; One package, two files: without this, package-lint treats each file as its
+;; own package and complains that mpv.el's symbols are not prefixed "mpv-vui".
+;; All Package-Requires therefore live in this main file only.
+(setq eldev-project-main-file "mpv.el")
+
+(eldev-use-vc-repository 'websocket-bridge :github "ginqi7/websocket-bridge")
+(eldev-use-vc-repository 'vui :github "d12frosted/vui.el")

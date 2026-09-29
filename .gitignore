@@ -1,0 +1,12 @@
+# Eldev 下载的第三方依赖副本
+.eldev/
+
+# Byte-compiled elisp
+*.elc
+
+# Python
+__pycache__/
+.ruff_cache/
+
+# websocket-bridge 运行时的缓存
+cachefile.dbm*
