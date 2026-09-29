@@ -5,7 +5,7 @@
 ;; Author: Qiqi Jin <ginqi7@gmail.com>
 ;; Version: 1.0
 ;; URL: https://github.com/ginqi7/mpv.el
-;; Package-Requires: ((emacs "27.1") (websocket-bridge "0.0.1") (vui "1.4.0"))
+;; Package-Requires: ((emacs "29.1") (websocket-bridge "0.0.1") (vui "1.4.0"))
 ;; Keywords: multimedia, video
 
 ;; This program is free software; you can redistribute it and/or modify
