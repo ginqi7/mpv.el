@@ -133,11 +133,18 @@ SUB-TEXT."
    x y))
 
 (defun mpv-download-subtitle ()
-  "Ask the Python side to download a subtitle for the current file."
+  "Ask the Python side to download a subtitle for the current played file."
   (interactive)
   (websocket-bridge-call
    "mpv" "download-subtitle"
    (plist-get mpv--video-info "path" #'equal)))
+
+(defun mpv-download-subtitle-select (file)
+  "Ask the Python side to download a subtitle for FILE."
+  (interactive "FDownload subtitle for: ")
+  (websocket-bridge-call
+   "mpv" "download-subtitle"
+   file))
 
 (defun mpv-run-time-update-functions (time)
   "Call every registered hook with the playback position TIME.
