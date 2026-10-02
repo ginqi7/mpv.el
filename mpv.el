@@ -36,6 +36,7 @@
 ;;; Code:
 
 (require 'websocket-bridge)
+(require 'dired)
 
 (defgroup mpv nil
   "Control the mpv video player."
