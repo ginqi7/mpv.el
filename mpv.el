@@ -139,12 +139,14 @@ SUB-TEXT."
    "mpv" "download-subtitle"
    (plist-get mpv--video-info "path" #'equal)))
 
-(defun mpv-download-subtitle-select (file)
+(defun mpv-download-subtitle-select (&optional file)
   "Ask the Python side to download a subtitle for FILE."
-  (interactive "FDownload subtitle for: ")
+  (interactive)
   (websocket-bridge-call
    "mpv" "download-subtitle"
-   file))
+   (or file
+       (dired-get-filename nil t)
+       (read-file-name "Download subtitle for file: "))))
 
 (defun mpv-run-time-update-functions (time)
   "Call every registered hook with the playback position TIME.
@@ -181,8 +183,12 @@ See `mpv--time-update-functions'."
 
 (defun mpv-play (&optional file)
   "Play FILE, replacing whatever is playing now."
-  (interactive "fVideo file: ")
-  (websocket-bridge-call "mpv" "play" file))
+  (interactive)
+  (websocket-bridge-call
+   "mpv" "play"
+   (or file
+       (dired-get-filename nil t)
+       (read-file-name "mpv play file: "))))
 
 (defun mpv-restart ()
   "Restart the player and show its output buffer."
