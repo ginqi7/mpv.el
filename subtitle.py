@@ -15,6 +15,8 @@ player was started.
 """
 
 import os
+import re
+import time
 import tempfile
 import threading
 
@@ -121,6 +123,24 @@ BOX_STRIP_GAP = 10  # gap left when lifted above the strip, in OSD pixels
 BOX_BG = "#000000c8"  # translucent black background
 BOX_EDGE = "#ffd54f"  # border, the same yellow as the hover highlight
 BOX_FG = "#ffffff"
+# Markdown emphasis rides on colour rather than on weight. The box font is a
+# kai face with no bold, and Qt would only fake one (see _font); a smeared
+# synthetic weight is worse than no weight. Italic is synthesised too, but a
+# slant stays legible where the weight would not.
+BOX_BOLD = BOX_EDGE
+BOX_CODE_FAMILY = ["Menlo", "PingFang SC", "Arial"]
+# The inline markdown the box renders. Bold comes before italic in the
+# alternation so ** wins on **x**.
+BOX_INLINE_MD = re.compile(r"(\*\*.+?\*\*|\*[^*\n]+?\*|`[^`\n]+?`)")
+# A heading is the one piece of block structure the box does take, because it
+# is a property of the whole line and costs nothing: the line just gets a
+# bigger font. Lists and fenced code are still absent -- those need a layout
+# to hang an indent on, and there isn't one here.
+# The space after the #'s is required, so "#1" and "#tag" stay literal.
+BOX_HEADING = re.compile(r"^(#{1,6})[ \t]+(.*)$")
+# how much bigger each level is, h1 through h6. A heading also drops its
+# #'s: they are the syntax, not the text.
+BOX_HEADING_SCALES = (1.7, 1.5, 1.35, 1.22, 1.12, 1.05)
 
 # the render area reserves height for "at most this many lines", and the font
 # size is derived from the video height instead -- otherwise a two-line
@@ -153,6 +173,52 @@ _RING = [
     for dy in (-1, 0, 1)
     if (dx, dy) != (0, 0)
 ]
+
+
+def box_runs(line):
+    """Split one line of draw_box's text into (text, style) runs.
+
+    style is "" plain, "b" bold, "i" italic, "c" code, and the markers
+    themselves are dropped. Everything BOX_INLINE_MD does not match is
+    carried through untouched, so a lone '*' or a half-written '**' costs
+    nothing and still comes out as the characters it was.
+    """
+    runs = []
+    for part in BOX_INLINE_MD.split(line):
+        if not part:
+            continue
+        if part.startswith("**") and part.endswith("**") and len(part) > 4:
+            runs.append((part[2:-2], "b"))
+        elif (
+            part.startswith("*")
+            and part.endswith("*")
+            and len(part) > 2
+            # "****" matches the italic alternative with "**" as its content,
+            # which is not italic markup at all. A real italic body never
+            # starts or ends on a star, so require that.
+            and not part[1:-1].startswith("*")
+            and not part[1:-1].endswith("*")
+        ):
+            runs.append((part[1:-1], "i"))
+        elif part.startswith("`") and part.endswith("`") and len(part) > 2:
+            runs.append((part[1:-1], "c"))
+        else:
+            runs.append((part, ""))
+    return runs or [("", "")]
+
+
+def box_line(line):
+    """Split one line of draw_box's text into (scale, runs).
+
+    scale is the font multiplier the whole line is drawn at -- 1.0 for
+    ordinary text, more for a markdown heading -- and runs are box_runs's
+    (text, style) pairs. Keeping the two apart is what lets a heading hold
+    **bold** inside it without the bold having to pick a size of its own.
+    """
+    m = BOX_HEADING.match(line)
+    if m:
+        return BOX_HEADING_SCALES[len(m.group(1)) - 1], box_runs(m.group(2))
+    return 1.0, box_runs(line)
 
 
 class SubtitleHover(QObject):
@@ -452,7 +518,10 @@ class SubtitleHover(QObject):
         # drawn once per line change.
         with self._lock:
             rects = list(self.rects)
+        start = time.perf_counter()
         self._paint_hit(self._fit_font_size(), index, rects)
+        end = time.perf_counter()
+        print(f"耗时: {end - start:.6f} 秒")
         self._painted_hit = index
 
     def _on_relayout(self):
@@ -486,9 +555,19 @@ class SubtitleHover(QObject):
         strip_bot = strip_top + self.css_h * self.scale
         # the box's vertical span [bottom-bh, bottom] meeting the strip is in
         # the way
-        if bottom - bh < strip_bot and bottom > strip_top:
-            bottom = strip_top - BOX_STRIP_GAP
-        return bottom
+        if not (bottom - bh < strip_bot and bottom > strip_top):
+            return bottom
+        lifted = strip_top - BOX_STRIP_GAP
+        # Lifting only ever moves the box up, so it has to be checked for
+        # actually fitting: a box taller than the space above the strip
+        # would go off the top, and the caller's max(0, ...) would then pin
+        # it to y=0 -- the screen top, further from the mouse than not
+        # lifting at all. In that case keep it above the cursor instead. Its
+        # bottom edge is already above the anchor, so it still clears the
+        # strip in every case where the lift was wanted.
+        if lifted - bh < 0:
+            return bottom
+        return lifted
 
     def _on_box(self, text, x, y):
         """Draw an auto-sized box directly above (x, y), containing text.
@@ -501,6 +580,11 @@ class SubtitleHover(QObject):
         just an ordinary character, so we split the lines here and draw
         them one by one.
 
+        Inline markdown is rendered: **bold**, *italic* and `code` become runs
+        drawn side by side (see box_runs), and a leading "#" makes the
+        whole line bigger (see box_line). Lists and fenced code are not
+        rendered.
+
         The coordinates are OSD ones, the same space as mouse-pos and the
         strip, so the mouse position can be passed straight in as the
         anchor. The box uses its own overlay id and won't displace the
@@ -509,9 +593,12 @@ class SubtitleHover(QObject):
         text = str(text)
         # split into lines. \\r\\n and a lone \\r have to be recognised too,
         # otherwise text from Windows leaves an invisible character at the end
-        # of the line and widens that line.
-        rows = [ln.replace("\r", "") for ln in text.split("\n")]
-        rows = [ln for ln in rows if ln] or [""]
+        # of the line and widens that line. The blank lines are dropped before
+        # the split into runs: a blank line would otherwise survive as one
+        # empty run and cost a whole line of height for nothing.
+        lines = [ln.replace("\r", "") for ln in text.split("\n")]
+        lines = [ln for ln in lines if ln] or [""]
+        rows = [box_line(ln) for ln in lines]
         if not text.strip():
             self._mpv("overlay-remove", id=BOX_ID)
             self._cur.pop(BOX_ID, None)
@@ -523,14 +610,56 @@ class SubtitleHover(QObject):
 
         fs = max(10, int((self.font_size or 42) * BOX_FONT_SCALE))
         f = self._font(fs, box=True)
-        fm = QFontMetricsF(f)
+        # One font per (row scale, run style), built on demand and kept: a box
+        # has a handful of rows and each is drawn nine times over for the
+        # ring, so rebuilding these per run would be the whole cost of the
+        # draw. Only code changes face and italic leans; bold is a colour,
+        # see BOX_BOLD.
+        faces = {}
+        metrics = {}
+        pens = {st: QColor(BOX_BOLD if st == "b" else BOX_FG) for st in ("", "b", "i", "c")}
+
+        def face(scale, style):
+            key = (scale, style)
+            if key not in faces:
+                fnt = QFont(f)
+                if scale != 1.0:
+                    fnt.setPixelSize(max(1, round(fs * scale)))
+                if style == "i":
+                    fnt.setItalic(True)
+                elif style == "c":
+                    fnt.setFamilies(BOX_CODE_FAMILY)
+                faces[key] = fnt
+                metrics[key] = QFontMetricsF(fnt)
+            return faces[key]
+
+        def metric(scale, style):
+            face(scale, style)  # fills both dicts
+            return metrics[(scale, style)]
+
+        def advance(scale, style, text):
+            return metric(scale, style).horizontalAdvance(text)
+
         pad = fs * BOX_PAD
-        # with several lines the line spacing is the line height
-        lh = fm.height()
+        # A heading is a taller row, so the rows no longer share one line
+        # height and bh is a sum rather than a multiple. Each row's height is
+        # the *plain* face at that row's scale: a row keeps one baseline
+        # whichever styles sit on it, so a taller code face must not push the
+        # rows apart.
+        laid = []
+        for scale, row in rows:
+            fm = metric(scale, "")
+            laid.append((scale, row, fm, fm.height()))
         # the size is entirely the text's: width from the widest line, height
-        # per line
-        bw = max(fm.horizontalAdvance(ln) for ln in rows) + 2 * pad
-        bh = lh * len(rows) + 2 * pad
+        # the sum of the row heights
+        bw = (
+            max(
+                sum(advance(scale, st, t) for t, st in row)
+                for scale, row, _, _ in laid
+            )
+            + 2 * pad
+        )
+        bh = sum(lh for _, _, _, lh in laid) + 2 * pad
         dpr = 2.0 if QApplication.primaryScreen().devicePixelRatio() > 1 else 1.0
         iw = max(1, round(bw * dpr))
         ih = max(1, round(bh * dpr))
@@ -548,23 +677,59 @@ class SubtitleHover(QObject):
         # the ring: as for the subtitle, black text at several offsets first,
         # then the white body. The box background is already translucent black,
         # so the edge only serves to "jump out of" it.
-        for i, ln in enumerate(rows):
-            at = QPointF(pad, pad + i * lh + fm.ascent())
-            pt.setBrush(Qt.NoBrush)
-            pt.setPen(QColor("#000000"))
+        #
+        # The offsets are the outer loop so the font and pen are set once per
+        # offset instead of once per run -- a markdown line is a handful of
+        # runs and the ring has eight offsets. The advance inside a pass is
+        # always the run's unshifted width, or the offsets would accumulate
+        # down the line instead of ringing it.
+        #
+        # The cursors are cx and cy, never x and y: those are the anchor this
+        # method was called with, and the placement below still needs them.
+        black = QColor("#000000")
+        pt.setBrush(Qt.NoBrush)
+        cy = pad
+        for scale, row, fm, lh in laid:
+            baseline = cy + fm.ascent()
             for dx, dy in _RING:
-                pt.drawText(at + QPointF(dx, dy), ln)
-            pt.setPen(QColor(BOX_FG))
-            pt.drawText(at, ln)
+                cx = pad
+                for t, st in row:
+                    pt.setFont(face(scale, st))
+                    pt.setPen(black)
+                    pt.drawText(QPointF(cx + dx, baseline + dy), t)
+                    cx += advance(scale, st, t)
+            cx = pad
+            for t, st in row:
+                pt.setFont(face(scale, st))
+                pt.setPen(pens[st])
+                pt.drawText(QPointF(cx, baseline), t)
+                cx += advance(scale, st, t)
+            cy += lh
         pt.end()
 
         argb = img.convertToFormat(QImage.Format_ARGB32)
         # (x, y) is the midpoint below the box: centered, but the bottom lifts
         # first
         ox = int(round(x - bw / 2))
-        oy = int(round(self._box_bottom(y, fs, bh) - bh))
+        bot = self._box_bottom(y, fs, bh)
+        oy = int(round(bot - bh))
         # off the top: stick to the edge, off-anchor beats invisible
-        oy = max(0, oy)
+        oy_clamped = max(0, oy)
+        # unconditional, like the other probes in this file: the box landing
+        # somewhere it shouldn't is a geometry question, and every term in it
+        # (bh in CSS against a bottom in OSD, strip_top, the scale) has to be
+        # on screen at once to say which one is wrong
+        dims = self.player.osd_dimensions
+        print(
+            f"[box] osd={dims.get('w')}x{dims.get('h')} scale={self.scale:.3f} "
+            f"fs={fs} 行数={len(rows)} 尺寸={bw:.0f}x{bh:.0f} "
+            f"锚点=({x:.0f},{y:.0f}) strip_top={self.origin[1]} "
+            f"strip_bot={self.origin[1] + self.css_h * self.scale:.0f} "
+            f"bottom={bot:.0f} oy原始={oy} oy钳位={oy_clamped} "
+            f"可用空间={bot:.0f}",
+            flush=True,
+        )
+        oy = oy_clamped
         sub_log(f"box {text!r} 尺寸={bw:.0f}x{bh:.0f} 锚点=({x},{y}) 左上=({ox},{oy})")
         self._blit(
             bytes(argb.constBits()),

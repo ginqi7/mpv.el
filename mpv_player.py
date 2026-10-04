@@ -22,7 +22,7 @@ import sys
 import tempfile
 import threading
 import time
-
+from datetime import datetime
 from mpv import MPV
 from PySide6.QtWidgets import QApplication
 
@@ -31,7 +31,14 @@ from PySide6.QtWidgets import QApplication
 # misplaced box, a missing overlay all read from the outside as
 # "subtitles are not showing". Only with this on can you see at a glance which
 # link broke; the render side uses it too, hence it lives here.
-DEBUG_SUB = True
+# DEBUG_SUB = True
+DEBUG_SUB = False
+LOGLEVEL = "warn"
+
+
+def log_handler(level, prefix, text):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    print(f"{now} [{level}] {prefix}: {text}")
 
 
 def sub_log(*a):
@@ -265,7 +272,7 @@ def start_player(path, sub_file, loop, hooks):
         f.write(RC_BINDING)
     options["input_conf"] = conf_path
 
-    player = MPV(log_handler=print, loglevel="debug", **options)
+    player = MPV(log_handler=log_handler, loglevel=LOGLEVEL, **options)
 
     def log_rc_bindings():
         """After startup, print the mouse key bindings to confirm input.conf
@@ -490,6 +497,25 @@ def _start_hover_watch(hover, player, loop, hooks, osd_bar):
             # disagree on geometry
             target = hover.cursor_target()
             hit = target["index"] if target else -1
+            # Unconditional probe, like the others in this file. The anchor the
+            # box is later drawn at is captured *here*, on the poll thread, and
+            # drawn against origin/scale read *again* on the main thread; if
+            # anchor() ran in between (a resize, the video starting) the two
+            # geometries disagree and the box lands nowhere near the word. This
+            # line is the hover-time half of that pair -- compare it with the
+            # [box] line from subtitle.py.
+            if hit != last_hit:
+                mp = player.mouse_pos or {}
+                print(
+                    f"[hover] hit={hit} mouse_pos=({mp.get('x')},{mp.get('y')}) "
+                    f"osd={player.osd_dimensions.get('w')}x"
+                    f"{player.osd_dimensions.get('h')} "
+                    f"origin={hover.origin} scale={hover.scale:.3f} "
+                    f"锚点=({target['x']:.0f},{target['y']:.0f})"
+                    if target
+                    else f"[hover] hit=-1 mouse_pos={mp} origin={hover.origin}",
+                    flush=True,
+                )
             if hit != last_hit:
                 last_hit = hit
                 hover.hit = hit

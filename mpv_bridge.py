@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import threading
+from datetime import datetime
 
 import sexpdata
 import websocket_bridge_python
@@ -94,6 +95,7 @@ async def handle_hover_word(sub_text, word, x, y):
     sub_text is the whole current subtitle line, word the one under the cursor.
     """
     sub_log(f"悬浮 {word!r} @ {x},{y}")
+    print(f"{_now()}: Hover")
     await eval_in_emacs("mpv-definition-word", [sub_text, word, x, y])
 
 
@@ -167,6 +169,7 @@ def draw_box(text, x, y):
         return
     try:
         hover.box.emit(str(text), int(float(x)), int(float(y)))
+        print(f"{_now()} : Finish")
     except (TypeError, ValueError):
         import traceback
 
@@ -299,33 +302,18 @@ async def video_info():
             fps,
         ],
     )
-    subtitles = [t for t in _prop("track-list", []) or [] if t.get("type") == "sub"]
-    sub_map = {t["title"]: t["id"] for t in subtitles if t.get("title") is not None}
-    print(sub_map)
-    info = {
-        "标题": _prop("media-title"),
-        "时长": f"{int(dur // 60)}:{dur % 60:05.2f}",
-        "分辨率": f"{vp.get('w')}x{vp.get('h')} @ {fps:.3f} fps",
-        "视频": f"{_prop('video-codec')} ({vp.get('codec-profile') or vp.get('pixelformat')})",
-        "音频": f"{ap.get('channels')} {ap.get('samplerate')} Hz",
-        "码率": " + ".join(f"{b} kbps" for b in bps) or "未知",
-        "色彩": f"{vp.get('colormatrix')} / {vp.get('gamma')} / {vp.get('colorlevels')}",
-        "字幕轨": sum(
-            1 for t in _prop("track-list", []) or [] if t.get("type") == "sub"
-        ),
-        "缓存": f"{_prop('demuxer-cache-duration')} 秒",
-    }
-    width = max(len(k) for k in info)
-    for k, v in info.items():
-        print(f"{k:{width}}  {v}", flush=True)
-    return info
+
+
+def _now():
+    now = datetime.now()
+    return now.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
 
 # dispatch message received from Emacs.
 async def on_message(message):
     try:
         info = json.loads(message)
-        print(info)
+        print(f"{_now()} : {info}")
         cmd = info[1][0].strip()
         if cmd == "plause":
             player.pause = True
