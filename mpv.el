@@ -108,7 +108,7 @@ are the point the mouse was over."
   "Ask the player to print the details of the current file."
   (websocket-bridge-call "mpv" "video-info"))
 
-(defun mpv-definition-word (_sub-text word x y)
+(defun mpv-definition-word (sub-text word x y)
   "Explain WORD near X, Y.
 
 The explanation is whatever `mpv-definition-function' returns.  The
@@ -117,11 +117,11 @@ unused here and only keeps the argument order the Python side sends."
   (mpv-show-box
    (format "%s:\n %s" word
            (if (functionp mpv-definition-function)
-               (funcall mpv-definition-function word)
+               (funcall mpv-definition-function sub-text word x y)
              "You should customize `mpv-definition-function'."))
    x y))
 
-(defun mpv-explain-text (sub-text _word x y)
+(defun mpv-explain-text (sub-text word x y)
   "Show SUB-TEXT and WORD near X, Y.
 
 The explanation is whatever `mpv-translation-function' returns for
@@ -129,7 +129,7 @@ SUB-TEXT."
   (mpv-show-box
    (format "%s:\n%s" sub-text
            (if (functionp mpv-translation-function)
-               (funcall mpv-translation-function sub-text)
+               (funcall mpv-translation-function sub-text word x y)
              "You should customize `mpv-translation-function'."))
    x y))
 
