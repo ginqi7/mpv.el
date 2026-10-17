@@ -4,6 +4,7 @@
 #     "websocket-bridge-python>=0.0.2",
 #     "mpv",
 #     "PySide6",
+#     "pyobjc-framework-Cocoa",
 #     "babelfish",
 #     "subliminal",
 # ]

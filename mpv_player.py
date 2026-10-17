@@ -17,6 +17,7 @@ module, each on its own thread:
 
 import locale
 import os
+import queue
 import shutil
 import sys
 import tempfile
@@ -239,6 +240,140 @@ class OsdBarVisibility:
             return 1000.0
 
 
+# Virtual key codes with a layout-independent meaning. Ordinary characters are
+# taken from the event itself, so a remapped Latin layout still types what the
+# user sees.
+NSEVENT_SPECIAL_KEYS = {
+    36: "ENTER",
+    48: "TAB",
+    49: "SPACE",
+    51: "BS",
+    53: "ESC",
+    71: "CLEAR",
+    76: "KP_ENTER",
+    96: "F5",
+    97: "F6",
+    98: "F7",
+    99: "F3",
+    100: "F8",
+    101: "F9",
+    103: "F11",
+    109: "F10",
+    111: "F12",
+    114: "INS",
+    115: "HOME",
+    116: "PGUP",
+    117: "DEL",
+    118: "F4",
+    119: "END",
+    120: "F2",
+    121: "PGDWN",
+    122: "F1",
+    123: "LEFT",
+    124: "RIGHT",
+    125: "DOWN",
+    126: "UP",
+}
+
+
+def nsevent_key(event, AppKit):
+    """Translate an NSEvent key-down into an mpv key name.
+
+    Returns None for events mpv should not see: Command shortcuts stay with
+    macOS (quit, hide, ...), and a dead key has no characters yet.
+    """
+    flags = event.modifierFlags()
+    if flags & AppKit.NSEventModifierFlagCommand:
+        return None
+    name = NSEVENT_SPECIAL_KEYS.get(event.keyCode())
+    if name is None:
+        # Ctrl/Alt turn characters() into a control character or an AltGr
+        # symbol; mpv wants the plain character plus a modifier prefix.
+        if flags & (AppKit.NSEventModifierFlagControl | AppKit.NSEventModifierFlagOption):
+            chars = event.charactersIgnoringModifiers()
+        else:
+            chars = event.characters()
+        if not chars:
+            return None
+        name = chars[0]
+        if name in "\r\n":
+            name = "ENTER"
+        elif name == "\t":
+            name = "TAB"
+        elif name == " ":
+            name = "SPACE"
+        elif name == "\x7f":
+            name = "BS"
+        elif name == "\x1b":
+            name = "ESC"
+        elif ord(name) < 0x20:
+            return None
+    mods = []
+    if flags & AppKit.NSEventModifierFlagControl:
+        mods.append("Ctrl")
+    if flags & AppKit.NSEventModifierFlagOption:
+        mods.append("Alt")
+    if flags & AppKit.NSEventModifierFlagShift:
+        mods.append("Shift")
+    return "+".join(mods + [name])
+
+
+def install_key_forwarding(player):
+    """Deliver keyboard input to mpv by replaying it as `keypress` commands.
+
+    On macOS mpv's Swift backend reads keys in its own NSApplication subclass
+    (Application.sendEvent -> InputHelper.processKey). Here Qt owns
+    NSApplication, so that override never runs: the NSView still handles mouse
+    and wheel events, but every keyboard binding in input.conf is dead. A local
+    NSEvent monitor sees the keys regardless, so translate them and feed mpv's
+    input system by hand.
+
+    Command runs mpv commands on the Qt main thread segfault, so the monitor
+    only queues; a separate thread sends them, which also preserves order.
+    """
+    try:
+        import AppKit
+    except ImportError:
+        # Not a debug detail: without PyObjC every key binding is dead again.
+        print("PyObjC 未安装，键盘输入无法转发给 mpv", flush=True)
+        return None
+
+    keys = queue.SimpleQueue()
+
+    def pump():
+        while True:
+            key = keys.get()
+            try:
+                player.command("keypress", key)
+            except Exception:
+                import traceback
+
+                traceback.print_exc()
+
+    threading.Thread(target=pump, name="mpv-key-forward", daemon=True).start()
+
+    def on_key(event):
+        try:
+            key = nsevent_key(event, AppKit)
+        except Exception:
+            import traceback
+
+            traceback.print_exc()
+            return event
+        if key is None:
+            return event
+        sub_log(f"转发按键 {key!r}")
+        keys.put(key)
+        # Consumed: without this Cocoa beeps at every key mpv does not bind.
+        return None
+
+    # The token must stay alive for the monitor to remain installed; the caller
+    # keeps the return value.
+    return AppKit.NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
+        AppKit.NSEventMaskKeyDown, on_key
+    )
+
+
 def start_player(path, sub_file, loop, hooks):
     """Main thread: Qt supplies NSApplication, so mpv's VO gets a window."""
     app = QApplication(sys.argv)
@@ -260,6 +395,12 @@ def start_player(path, sub_file, loop, hooks):
         "sub_visibility": "no",
         "watch-later-options": "start,volume,speed",
         "watch_later_directory": "~/.config/mpv/watch_later/",
+        # libmpv disables VO keyboard input by default (the CLI player enables
+        # it). On its own this does not fix keyboard input here -- Qt owns
+        # NSApplication, so mpv's macOS backend never sees the keys at all;
+        # install_key_forwarding replays them. Kept for backends that do route
+        # keys to the VO.
+        "input_vo_keyboard": "yes",
     }
     if sub_file:
         options["sub_files"] = sub_file
@@ -270,11 +411,22 @@ def start_player(path, sub_file, loop, hooks):
     # the command line.
     conf_dir = tempfile.mkdtemp(prefix="mpvsub-conf-")
     conf_path = os.path.join(conf_dir, "input.conf")
+    print(conf_path)
     with open(conf_path, "w") as f:
         f.write(RC_BINDING)
+        # --input-conf replaces mpv's default configuration wholesale, so the
+        # user's own bindings have to be folded into the same file.
+        try:
+            with open(os.path.expanduser("~/.config/mpv/input.conf")) as user_conf:
+                f.write(user_conf.read())
+        except OSError:
+            pass
     options["input_conf"] = conf_path
 
     player = MPV(log_handler=log_handler, loglevel=LOGLEVEL, **options)
+    # The returned token keeps the NSEvent monitor installed; it must outlive
+    # the event loop, hence the local binding.
+    _key_monitor = install_key_forwarding(player)
 
     def log_rc_bindings():
         """After startup, print the mouse key bindings to confirm input.conf
