@@ -86,6 +86,7 @@ def report_future_error(fut):
 async def handle_time_update(value):
     # await video_info()
     await eval_in_emacs("mpv-run-time-update-functions", [value])
+    player.command("write-watch-later-config")
     print(f"當前位置: {value:.2f} 秒")
 
 

@@ -258,6 +258,8 @@ def start_player(path, sub_file, loop, hooks):
         # We render the subtitles ourselves, so switch off mpv's, otherwise
         # they double up
         "sub_visibility": "no",
+        "watch-later-options": "start,volume,speed",
+        "watch_later_directory": "~/.config/mpv/watch_later/",
     }
     if sub_file:
         options["sub_files"] = sub_file
