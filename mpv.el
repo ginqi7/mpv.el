@@ -109,7 +109,7 @@ are the point the mouse was over."
   (websocket-bridge-call "mpv" "video-info"))
 
 (defun mpv-definition-word (sub-text word x y)
-  "Explain WORD near X, Y.
+  "Explain WORD in SUB-TEXT near X, Y.
 
 The explanation is whatever `mpv-definition-function' returns.  The
 first argument is the whole subtitle line the word came from; it is
