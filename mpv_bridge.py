@@ -27,16 +27,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mpv_player import RC_KEY, start_player, sub_log  # noqa: E402
 from subtitle import SubtitleHover, download_subtitle, srt_path_for  # noqa: E402
 
-# MOVIE = (
-#     "/Volumes/NAS/004-tv-series/英文/Neagley/"
-#     "Neagley.S01E02.2026.2160p.AMZN.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265.mkv"
-# )
-
-# Subtitle file; leave it None to load no subtitles. It is derived from MOVIE
-# here (the rule lives in subtitle.srt_path_for), so a new episode only means
-# editing MOVIE in one place.
-# SUB_FILE = srt_path_for(MOVIE)
-
 
 # This file only assembles: the Emacs bridge (commands in, notifications out),
 # the mpv_player hooks, and the entry point. Rendering lives in subtitle.py,
@@ -243,7 +233,6 @@ async def _play_and_report(file):
         player.play(file)
         if not await wait_loaded():
             return
-        print("fuck")
         srt = srt_path_for(file)
         if srt:
             # Attach after loading: the external en.srt is a new
